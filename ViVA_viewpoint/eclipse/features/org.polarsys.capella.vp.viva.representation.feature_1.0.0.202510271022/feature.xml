@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feature
+      id="org.polarsys.capella.vp.viva.representation.feature"
+      label="%featureName"
+      version="1.0.0.202510271022"
+      provider-name="%providerName">
+
+   <description url="%descriptionURL">
+      %description
+   </description>
+
+   <copyright url="%copyrightURL">
+      %copyright
+   </copyright>
+
+   <license url="%licenseURL">
+      %license
+   </license>
+
+   <plugin
+         id="org.polarsys.capella.vp.viva.ui"
+         download-size="0"
+         install-size="0"
+         version="1.0.0.202510271022"
+         unpack="false"/>
+
+   <plugin
+         id="org.polarsys.capella.vp.viva.design"
+         download-size="0"
+         install-size="0"
+         version="1.0.0.202510271022"
+         unpack="false"/>
+
+   <plugin
+         id="org.polarsys.capella.vp.viva.contextual.explorer"
+         download-size="0"
+         install-size="0"
+         version="1.0.0.202510271022"
+         unpack="false"/>
+
+</feature>

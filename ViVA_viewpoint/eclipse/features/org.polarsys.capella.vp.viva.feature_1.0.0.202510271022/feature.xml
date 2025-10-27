@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feature
+      id="org.polarsys.capella.vp.viva.feature"
+      label="ViVA Feature"
+      version="1.0.0.202510271022">
+
+   <description url="http://www.example.com/description">
+      [Enter Feature Description here.]
+   </description>
+
+   <copyright url="http://www.example.com/copyright">
+      [Enter Copyright Description here.]
+   </copyright>
+
+   <license url="http://www.example.com/license">
+      [Enter License Description here.]
+   </license>
+
+   <includes
+         id="org.polarsys.capella.vp.viva.af.feature"
+         version="1.0.0.202510271022"/>
+
+   <includes
+         id="org.polarsys.capella.vp.viva.rules.feature"
+         version="1.0.0.202510271022"/>
+
+   <includes
+         id="org.polarsys.capella.vp.viva.representation.feature"
+         version="1.0.0.202510271022"/>
+
+   <plugin
+         id="org.polarsys.capella.vp.viva.model"
+         download-size="0"
+         install-size="0"
+         version="1.0.0.202510271022"
+         unpack="false"/>
+
+   <plugin
+         id="org.polarsys.capella.vp.viva.model.edit"
+         download-size="0"
+         install-size="0"
+         version="1.0.0.202510271022"
+         unpack="false"/>
+
+   <plugin
+         id="org.polarsys.capella.vp.viva"
+         download-size="0"
+         install-size="0"
+         version="1.0.0.202510271022"
+         unpack="false"/>
+
+   <plugin
+         id="org.polarsys.capella.vp.viva.vpdsl"
+         download-size="0"
+         install-size="0"
+         version="1.0.0.202510271022"
+         unpack="false"/>
+
+</feature>
