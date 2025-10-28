@@ -1,5 +1,43 @@
 ## ViVA: Verification and Validation Assessment, a Capella Viewpoint
-This a Capella Viewpoint for **V&V activities** developed with Capella Studio
+This a Capella Viewpoint for **V&V activities** developed with Capella Studio. 
+
+### ViVA Viewpoint Overview
+
+The ViVA Viewpoint has been developed to streamline the creation and management of requirements within Capella.
+It enables users to generate requirements with standardised and structured information, ensuring the homogenisation and consistency of data across the entire model.
+
+### Key Features
+
+*Standardised Requirement Creation
+The viewpoint introduces predefined attributes and templates for requirements, improving consistency and reducing ambiguity.
+This standardisation is crucial when managing hundreds or even thousands of requirements in large-scale projects.
+
+*Faster Requirement Authoring
+The process of creating and maintaining requirements has been made simpler and more efficient, significantly reducing the time needed for documentation.
+
+*Dynamic Visualisations
+The viewpoint includes dynamic diagrams that automatically change colour based on specific attributes within the model.
+This feature helps users quickly identify potential issues or inconsistencies and resolve them more effectively.
+
+### Integration with Python4Capella Scripts
+
+The viewpoint is complemented by two Python scripts designed to run in Python4Capella.
+These scripts enable the automatic extraction of key information into Excel matrices:
+
+*Verification Matrix
+Extracts all requirements from the selected diagram, including their key attributes.
+The output groups requirements by category, providing a clear and traceable overview.
+
+*Validation Matrix
+Traverses the entire model to collect information across all abstraction levels.
+This allows users to trace requirements back from system implementation to stakeholder needs, ensuring that the operational-level objectives are fully satisfied.
+
+### Tutorial and Documentation
+
+Finally, a step-by-step tutorial is provided to guide users through the creation of this viewpoint.
+Given the limited availability of resources and documentation on Capella Studio, this tutorial was considered essential to share the knowledge and experience gained during the development process.
+The goal is to support and inspire future open-source viewpoint developments within the Capella community.
+
 
 ## Getting Started
 
