@@ -1,6 +1,10 @@
 ## ViVA: Verification and Validation Assessment, a Capella Viewpoint
 This a Capella Viewpoint for **V&V activities** developed with Capella Studio. 
 
+<p align="center">
+  <img src="ViVA_icon.png" alt="ViVA Icon" width="500"/>
+</p>
+
 ![ViVA Icon](ViVA_icon.png)
 
 ### ViVA Viewpoint Overview
