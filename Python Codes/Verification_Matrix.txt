@@ -1,0 +1,394 @@
+# name                 : Verification Matrix 
+# script-type          : Python
+# description          : Create the verification Matrix from the Requirements present in the selected diagram
+# popup                : enableFor(org.eclipse.sirius.viewpoint.DRepresentationDescriptor)
+
+
+
+# =========================
+# Import e setup
+# =========================
+
+# Include needed for the Capella modeller API
+include('workspace://Python4Capella/simplified_api/capella.py')
+if False:
+    from simplified_api.capella import *
+    
+# include needed for the VM functions
+include('workspace://Python4Capella/sample_scripts/Verification_Matrix_Codes.py')
+if False:
+    from sample_scripts.Verification_Matrix_Functions import *
+    
+# Include needed for utilities
+include('workspace://Python4Capella/utilities/CapellaPlatform.py')
+if False:
+    from utilities.CapellaPlatform import *
+    
+# Include needed to read/write xlsx files
+from openpyxl import *
+from openpyxl.formatting.rule import ColorScaleRule,CellIsRule,FormulaRule
+from openpyxl.styles import Alignment, NamedStyle, Font, colors, Color, PatternFill
+from openpyxl.styles.differential import DifferentialStyle
+from openpyxl.styles.borders import Border, Side
+from openpyxl.utils import get_column_letter
+
+import re
+from datetime import datetime
+import os
+
+
+
+# =========================
+# Styles
+# =========================
+bold_font = Font(bold=True, color="FFFFFF")
+header_fill = PatternFill("solid", fgColor="305496")
+
+center_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+thin_border = Border(
+    left=Side(style="thin"),
+    right=Side(style="thin"),
+    top=Side(style="thin"),
+    bottom=Side(style="thin"),
+)
+
+
+# =========================
+# Requirement attributes
+# =========================
+
+ATTRS_TO_SAVE = [
+    "reqIdentification",
+    "nameReq",
+    "text",
+    "ecss",
+    "justification",
+    "remarks",
+    "verificationmodel",
+    "closeOutReference",
+    "verificationComment",
+    "verificationStatus",
+    "rfdRfw"
+]
+
+ATTRS_HEADERS = {
+    "reqIdentification": "ID Requirement",
+    "nameReq": "Name",
+    "text": "Description",
+    "ecss": "ECSS Division",
+    "justification": "Justification",
+    "remarks": "Remarks",
+    "verificationmodel": "Verification Model",
+    "closeOutReference": "Close Out Reference",
+    "verificationComment": "Verification Comment",
+    "verificationStatus": "Verification Status",
+    "rfdRfw": "RFD/RFW"
+}
+
+VERIFICATION_REFERENCES = {
+    "rodAss": "ROD",
+    "inAss": "Inspection",
+    "anAss": "Analysis",
+    "teAss": "Test"
+}
+
+
+# =========================
+# Open diagram and model
+# =========================
+diagram = Diagram(CapellaPlatform.getFirstSelectedElement())
+aird_path = "xxx.aird" # Put the path to your aird
+model = CapellaModel()
+model.open(aird_path)
+
+requirements = [el for el in diagram.get_represented_elements()
+                if el.get_java_object().eClass().getName() == "VivaRequirement"]
+
+
+# =========================
+# Uncomment this part to extract all the requirements from the model and not a diagram
+# =========================
+
+# ---- Configuration ----
+#aird_path = "/SkimSat/SkimSat.aird"  # Change if needed
+
+# Open Capella model
+#model = CapellaModel()
+#model.open(aird_path)
+#se = model.get_system_engineering()
+#print('Starting export of model ' + se.get_name())
+
+# Collect all Requirement objects from the entire model
+#requirements = [
+#    el for el in se.get_all_contents()
+#    if el.get_java_object().eClass().getName() == "VivaRequirement "
+#]
+
+
+# =========================
+# Create or open Excel workbook
+# =========================
+project_name = aird_path.split("/")[1]
+project = CapellaPlatform.getProject("/" + project_name)
+folder = CapellaPlatform.getFolder(project, 'results')
+xlsx_file_name = CapellaPlatform.getAbsolutePath(folder) + f'/Verification Matrix - {diagram.get_name()}.xlsx'
+
+today = datetime.today().strftime("%d-%m-%Y")
+new_version = f"{diagram.get_name()}_{today.replace('-', '')}"
+
+# Load or create workbook
+if os.path.exists(xlsx_file_name):
+    workbook = load_workbook(xlsx_file_name)
+    ws_log = workbook["Change Log"]
+    # Delete all other sheets
+    for sheet_name in workbook.sheetnames:
+        if sheet_name != "Change Log":
+            del workbook[sheet_name]
+else:
+    workbook = Workbook()
+    ws_log = workbook.active
+    ws_log.title = "Change Log"
+
+    # Build static layout
+    ws_log.merge_cells("A1:C1")
+    ws_log["A1"] = "Requirement Verification Matrix - Change Log"
+    ws_log["A1"].font = Font(bold=True, size=12, color="FFFFFF")
+    ws_log["A1"].fill = header_fill
+    ws_log["A1"].alignment = center_align
+
+    ws_log["A2"] = "Issue Date"
+    ws_log["B2"] = today
+    ws_log["A3"] = "Issue / Revision"
+    ws_log["A4"] = "Applies to"
+
+    ws_log.merge_cells("A6:C6")
+    ws_log["A6"] = "Instructions to fill out the CHANGE LOG"
+    ws_log["A6"].font = Font(bold=True)
+    ws_log["A6"].alignment = center_align
+
+    instructions = [
+        "- New Version Identification: Identify the document with a new version after a change is implemented on the system.",
+        "- Date, Automatically updated",
+        "- Person in Charge",
+    ]
+    row = 7
+    for instr in instructions:
+        ws_log[f"A{row}"] = instr
+        row += 1
+
+    headers = ["New Version Identification", "Date", "Person in Charge"]
+    row = 11
+    for col, header in enumerate(headers, start=1):
+        cell = ws_log.cell(row=row, column=col, value=header)
+        cell.font = bold_font
+        cell.fill = header_fill
+        cell.alignment = center_align
+        cell.border = thin_border
+
+    col_widths = [30, 15, 40]
+    for i, w in enumerate(col_widths, start=1):
+        ws_log.column_dimensions[get_column_letter(i)].width = w
+
+
+# =========================
+# Update Change Log with new entry
+# =========================
+row = ws_log.max_row + 1
+ws_log.cell(row=row, column=1, value=new_version)
+ws_log.cell(row=row, column=2, value=today)
+
+
+for col in range(1, 4):
+    cell = ws_log.cell(row=row, column=col)
+    cell.border = thin_border
+    cell.alignment = Alignment(vertical="top", wrap_text=True)
+
+
+# =========================
+# Create Requirements sheet
+# =========================
+ws = workbook.create_sheet("Requirements")
+
+col_order = [
+    "reqIdentification",
+    "nameReq",
+    "text",
+    "ecss",
+    "pcRef",
+    "justification",
+    "remarks",
+    "Verification Method",
+    "Verification Stage",
+    "Compliance",
+    "Compliance Comment",
+    "Justification",
+    "Test Specification",
+    "verificationmodel",
+    "closeOutReference",
+    "verificationComment",
+    "verificationStatus",
+    "rfdRfw",
+    "Children Req."
+]
+
+headers = []
+for col in col_order:
+    if col == "pcRef":
+        headers.append("Unit/Subsystem")
+    elif col in ("Verification Stage", "Compliance", "Compliance Comment", "Justification", "Test Specification"):
+        headers.append(col)
+    elif col in ATTRS_HEADERS:
+        headers.append(ATTRS_HEADERS[col])
+    else:
+        headers.append(col)
+ws.append(headers)
+
+header_font = Font(bold=True, color="FFFFFF")
+header_fill = PatternFill(start_color="4F81BD", end_color="4F81BD", fill_type="solid")
+for col_idx, header in enumerate(headers, start=1):
+    cell = ws.cell(row=1, column=col_idx)
+    cell.font = header_font
+    cell.fill = header_fill
+    cell.alignment = Alignment(horizontal="center", vertical="center")
+
+border = Border(left=Side(style='thin'),
+                right=Side(style='thin'),
+                top=Side(style='thin'),
+                bottom=Side(style='thin'))
+
+# Fill Excel with requirements
+seen_rows = set()
+all_rows = []
+
+for req_el in requirements:
+    jObj = req_el.get_java_object()
+    data = extract_relevant_attributes(jObj)
+    pc_ref_raw = get_pc_reference_name(jObj) or ""
+    pc_ref_list = [part.strip() for part in re.split(r'[;,/]\s*', pc_ref_raw) if part.strip()]
+    ver_method = get_verification_method(jObj)
+    related_req = get_related_requirements_name(jObj)
+    verif_attrs = extract_verification_attrs(jObj)
+
+    row_data = []
+    for col in col_order:
+        if col in ATTRS_TO_SAVE:
+            row_data.append(data[col])
+        elif col == "pcRef":
+            row_data.append(pc_ref_raw)
+        elif col == "Verification Method":
+            row_data.append(ver_method)
+        elif col in verif_attrs:
+            row_data.append(verif_attrs[col])
+        elif col == "Children Req.":
+            row_data.append(", ".join(related_req) if isinstance(related_req, list) else related_req)
+        else:
+            row_data.append("")
+
+    row_data = [", ".join(c) if isinstance(c, list) else c for c in row_data]
+    row_key = tuple(row_data)
+    if row_key not in seen_rows:
+        ws.append(row_data)
+        seen_rows.add(row_key)
+        all_rows.append((row_data, pc_ref_list))
+        for ci in range(1, len(row_data) + 1):
+            cell = ws.cell(row=ws.max_row, column=ci)
+            cell.border = border
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+
+# Adjust widths
+for i, col in enumerate(headers, start=1):
+    if i in (3, 5, 6, 9, 10, 14):
+        ws.column_dimensions[get_column_letter(i)].width = 45
+    else:
+        ws.column_dimensions[get_column_letter(i)].width = 20
+
+
+# =========================
+# Conditional formatting
+# =========================
+green_fill = PatternFill(fill_type="solid", start_color="C6EFCE", end_color="C6EFCE")
+blue_fill  = PatternFill(fill_type="solid", start_color="BDD7EE", end_color="BDD7EE")
+red_fill   = PatternFill(fill_type="solid", start_color="FFC7CE", end_color="FFC7CE")
+closed_fill = PatternFill(fill_type="solid", start_color="9BC2E6", end_color="D9D9D9")
+
+comp_idx   = col_order.index("Compliance") + 1
+col_letter = get_column_letter(comp_idx)
+
+if ws.max_row > 1:
+    range_str = f"{col_letter}2:{col_letter}{ws.max_row}"
+    top_cell  = f"{col_letter}2"
+
+    ws.conditional_formatting.add(range_str,
+        FormulaRule(formula=[f'ISNUMBER(SEARCH("Non Compliance",{top_cell}))'], fill=red_fill))
+    ws.conditional_formatting.add(range_str,
+        FormulaRule(formula=[f'ISNUMBER(SEARCH("Compliance",{top_cell}))'], fill=green_fill))
+    ws.conditional_formatting.add(range_str,
+        FormulaRule(formula=[f'ISNUMBER(SEARCH("Non Applicable",{top_cell}))'], fill=blue_fill))
+
+    vs_idx = col_order.index("verificationStatus") + 1
+    vs_col = get_column_letter(vs_idx)
+    last_col = get_column_letter(len(col_order))
+    range_str = f"A2:{last_col}{ws.max_row}"
+
+    ws.conditional_formatting.add(
+        range_str,
+        FormulaRule(formula=[f'${vs_col}2="Closed"'], fill=closed_fill)
+    )
+
+
+# =========================
+# One sheet per pcRef
+# =========================
+unique_refs = sorted({ref for (_row, ref_list) in all_rows for ref in ref_list})
+
+for ref in unique_refs:
+    title = ref.replace("/", "_")[:31]
+    sheet = workbook.create_sheet(title=title)
+    sheet.append(headers)
+    for ci, hdr in enumerate(headers, start=1):
+        cell = sheet.cell(row=1, column=ci)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = border
+
+    for row_data, ref_list in all_rows:
+        if ref in ref_list:
+            sheet.append(row_data)
+            for ci in range(1, len(row_data) + 1):
+                cell = sheet.cell(row=sheet.max_row, column=ci)
+                cell.border = border
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+
+    for i in range(1, len(headers) + 1):
+        letter = get_column_letter(i)
+        sheet.column_dimensions[letter].width = ws.column_dimensions[letter].width
+
+    if sheet.max_row > 1:
+        range_str  = f"{col_letter}2:{col_letter}{sheet.max_row}"
+        top_cell   = f"{col_letter}2"
+        sheet.conditional_formatting.add(range_str,
+            FormulaRule(formula=[f'ISNUMBER(SEARCH("Non Compliance",{top_cell}))'], fill=red_fill))
+        sheet.conditional_formatting.add(range_str,
+            FormulaRule(formula=[f'ISNUMBER(SEARCH("Compliance",{top_cell}))'], fill=green_fill))
+        sheet.conditional_formatting.add(range_str,
+            FormulaRule(formula=[f'ISNUMBER(SEARCH("Non Applicable",{top_cell}))'], fill=blue_fill))
+
+        vs_idx = col_order.index("verificationStatus") + 1
+        vs_col = get_column_letter(vs_idx)
+        last_col = get_column_letter(len(col_order))
+        range_str = f"A2:{last_col}{sheet.max_row}"
+
+        sheet.conditional_formatting.add(
+            range_str,
+            FormulaRule(formula=[f'${vs_col}2="Closed"'], fill=closed_fill)
+        )
+
+
+# =========================
+# Save Excel
+# =========================
+workbook.save(xlsx_file_name)
+print(f"Excel file saved at: {xlsx_file_name}")
+
+CapellaPlatform.refresh(folder)

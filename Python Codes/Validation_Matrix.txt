@@ -1,0 +1,1343 @@
+# name                 : Validation Matrix
+# script-type          : Python
+# description          : Create a hierarchy for the all levels - codes changed
+# popup                : enableFor(org.polarsys.capella.core.data.capellacore.CapellaElement)
+
+'''
+This script allows to extract all the elements in the model and create a Validation matrix that explore the main elements
+ from the Physical Level to the Operational One.
+
+It will create a folder result in the selected Capella project with the resulting xlsx file.
+'''
+# To run it:
+#  - click on the script, select Run As -> EASE Script
+#
+
+# include needed for the Capella modeller API
+include('workspace://Python4Capella/simplified_api/capella.py')
+if False:
+    from simplified_api.capella import *
+    
+# include needed for utilities
+include('workspace://Python4Capella/utilities/CapellaPlatform.py')
+if False:
+    from utilities.CapellaPlatform import *
+    
+
+# include needed to read/write xlsx files
+from openpyxl import *
+from openpyxl.formatting.rule import ColorScaleRule,CellIsRule,FormulaRule
+from openpyxl.styles import Alignment, NamedStyle, Font, colors, Color, PatternFill
+from openpyxl.styles.differential import DifferentialStyle
+from openpyxl.styles.borders import Border, Side
+from openpyxl.utils import get_column_letter
+from openpyxl.chart.data_source import Level
+from collections import defaultdict
+import re
+
+
+
+# ---- Configuration ----
+aird_path = "/SkimSat/SkimSat.aird"  # Change to your model path
+
+# Open Capella model
+model = CapellaModel()
+model.open(aird_path)
+se = model.get_system_engineering()
+print('Starting export of model ' + se.get_name())
+
+
+
+
+# =========================
+# Functions
+# =========================
+
+elements_dict = {}
+child_to_parents = {}
+
+def type_of_element(obj):
+    """Restituisce il tipo leggibile dell'oggetto."""
+    if obj is None:
+        return None
+    if isinstance(obj, NodePC):
+        return "NodePC"
+    if isinstance(obj, BehaviorPC):
+        return "BehaviorPC"
+    if isinstance(obj, LogicalComponent):
+        return "LogicalComponent"
+    if isinstance(obj, LogicalActor):
+        return "LogicalActor"
+    if isinstance(obj, Function):
+        return "Function"
+    if isinstance(obj, SystemActor):
+        return "SystemActor"
+    if isinstance(obj, System):
+        return "System"
+    return "Function"
+
+def unique_key(name, obj):
+    """Create a stable unique key using EMF identity (not Python wrapper id)."""
+    if obj is None:
+        return f"{name}__None"
+    try:
+        j_obj = obj.get_java_object()
+        # Use EMF URI if available, else string representation
+        uri = getattr(j_obj, "toString", lambda: str(j_obj))()
+        return f"{name}__{hash(uri)}"
+    except Exception:
+        # fallback: name + hash of string repr
+        return f"{name}__{hash(str(obj))}"
+
+
+
+def process_function(func, parent_name, level, se):
+    if func is None:
+        return
+
+    func_name = func.get_name() or "<unnamed_Function>"
+
+    # Determina tipo funzione
+    func_type = "Function"
+    try:
+        class_name = func.get_java_object().eClass().getName()
+        if "SystemFunction" in class_name:
+            func_type = "SystemFunction"
+        elif "LogicalFunction" in class_name:
+            func_type = "LogicalFunction"
+        elif "PhysicalFunction" in class_name:
+            func_type = "PhysicalFunction"
+    except Exception:
+        pass
+
+    # Registra nel dizionario
+    key = unique_key(func_name, func)
+    elements_dict[key] = {
+        "name": func_name,
+        "type": func_type,
+        "level": f"F{level}",
+        "parent": {"dad": [], "children": []},
+        "functions": None,
+        "obj": func
+    }
+
+    indent = "  " * level
+    #print(f"{indent}- {func_type}: {func_name}")
+
+    # -----------------------------
+    # LOGICAL FUNCTION → parent logico + system functions realizzate
+    # -----------------------------
+    if func_type == "LogicalFunction":
+        try:
+            container = func.get_container()
+        except Exception:
+            container = None
+
+        try:
+            container_type = container.get_java_object().eClass().getName() if container else None
+        except Exception:
+            container_type = None
+
+        if container and "LogicalFunction" in (container_type or ""):
+            parent_func = container
+            parent_name_str = parent_func.get_name() or "<unnamed_Parent_LogicalFunction>"
+            indent_parent = "  " * (level + 1)
+            #print(f"{indent_parent}- Parent LogicalFunction: {parent_name_str}")
+
+            if parent_name_str not in elements_dict:
+                key = unique_key(parent_name_str, parent_func)
+                elements_dict[key] = {
+                    "name": parent_name_str,
+                    "type": "LogicalFunction",
+                    "level": f"F{level + 1}",
+                    "parent": {"dad": parent_name, "children": []},
+                    "functions": None,
+                    "obj": parent_func
+                }
+
+            try:
+                realized_sys_funcs = parent_func.get_realized_system_functions() or []
+            except Exception:
+                realized_sys_funcs = []
+
+            for sf in realized_sys_funcs:
+                sf_name = sf.get_name() or "<unnamed_SystemFunction>"
+                indent_sf = "  " * (level + 2)
+                #print(f"{indent_sf}- SystemFunction: {sf_name}")
+                
+                key = unique_key(sf_name, sf)
+                elements_dict[key] = {
+                    "name": sf_name,
+                    "type": "SystemFunction",
+                    "level": f"S{level + 2}",
+                    "parent": {"dad": f"LogicalFunction: {parent_name_str}", "children": []},
+                    "functions": None,
+                    "obj": sf
+                }
+
+                # Chiamata ricorsiva per esplorare il livello System
+                process_function(sf, f"LogicalFunction: {parent_name_str}", level + 3, se)
+
+    # -----------------------------
+    # SYSTEM FUNCTION → parent + operational activities realizzate
+    # -----------------------------
+    elif func_type == "SystemFunction":
+        try:
+            parent_func = func.get_container()
+        except Exception:
+            parent_func = None
+
+        try:
+            parent_type = parent_func.get_java_object().eClass().getName() if parent_func else None
+        except Exception:
+            parent_type = None
+
+        if parent_func and "SystemFunction" in (parent_type or ""):
+            parent_name_str = parent_func.get_name() or "<unnamed_Parent_SystemFunction>"
+            indent_parent = "  " * (level + 1)
+            #print(f"{indent_parent}- Parent SystemFunction: {parent_name_str}")
+
+            if parent_name_str not in elements_dict:
+                key = unique_key(parent_name_str, parent_func)
+                elements_dict[key] = {
+                    "name": parent_name_str,
+                    "type": "SystemFunction",
+                    "level": f"S{level + 1}",
+                    "parent": {"dad": parent_name, "children": []},
+                    "functions": None,
+                    "obj": parent_func
+                }
+
+            try:
+                realized_ops = parent_func.get_realized_operational_activities() or []
+            except Exception:
+                realized_ops = []
+
+            for op in realized_ops:
+                op_name = op.get_name() or "<unnamed_OperationalActivity>"
+                indent_op = "  " * (level + 2)
+                #print(f"{indent_op}- OperationalActivity: {op_name}")
+
+                key = unique_key(op_name, op)
+                elements_dict[key] = {
+                    "name": op_name,
+                    "type": "OperationalActivity",
+                    "level": f"O{level + 2}",
+                    "parent": {"dad": f"SystemFunction: {parent_name_str}", "children": []},
+                    "functions": None,
+                    "obj": op
+                }
+
+                # -----------------------------
+                # OperationalActivity → OperationalEntity/Actor
+                # -----------------------------
+                try:
+                    allocating_entities = op.get_allocating_entity()
+                except Exception:
+                    allocating_entities = []
+
+                if not isinstance(allocating_entities, list) and allocating_entities is not None:
+                    allocating_entities = [allocating_entities]
+
+                for entity in allocating_entities or []:
+                    if entity is None:
+                        continue
+                    try:
+                        entity_name = entity.get_name() or "<unnamed_Entity>"
+                    except Exception:
+                        entity_name = "<unnamed_Entity>"
+
+                    entity_type = "OperationalEntity"
+                    try:
+                        eclass_name = entity.get_java_object().eClass().getName()
+                        if "OperationalActor" in eclass_name:
+                            entity_type = "OperationalActor"
+                    except Exception:
+                        pass
+
+                    indent_entity = "  " * (level + 3)
+                    #print(f"{indent_entity}- {entity_type}: {entity_name}")
+                    
+                    key = unique_key(entity_name, entity)
+                    elements_dict[key] = {
+                        "name": entity_name,
+                        "type": entity_type,
+                        "level": f"O{level + 3}",
+                        "parent": {"dad": f"OperationalActivity: {parent_name_str}", "children": []},
+                        "functions": None,
+                        "obj": entity
+                    }
+
+                # -----------------------------
+                # OperationalCapabilities + PostConditions
+                # -----------------------------
+                try:
+                    capabilities = se.get_all_contents_by_type(OperationalCapability) or []
+                except Exception:
+                    capabilities = []
+
+                # Mappa temporanea nome -> capability
+                cap_map = {cap.get_name() or "<unnamed_Capability>": cap for cap in capabilities}
+
+                for cap in capabilities:
+                    cap_name = cap.get_name() or "<unnamed_Capability>"
+                    try:
+                        oc_java = cap.get_java_object()
+                        feat = oc_java.eClass().getEStructuralFeature("involvedAbstractFunctions")
+                        abstract_functions = oc_java.eGet(feat) or []
+                    except Exception:
+                        abstract_functions = []
+
+                    try:
+                        # Confronto EMF
+                        if op.get_java_object() in abstract_functions:
+                            cap_level = int(elements_dict[op_name]["level"][1:]) + 1
+                            cap_indent = "  " * cap_level
+
+                            # Dizionario e stampa
+                            key = unique_key(cap_name, cap)
+                            elements_dict[key] = {
+                                "name": cap_name,
+                                "type": "OperationalCapability",
+                                "level": f"O{cap_level}",
+                                "parent": {"dad": f"OperationalActivity: {parent_name_str}", "children": []},
+                                "functions": None,
+                                "obj": cap
+                            }
+                            #print(f"{cap_indent}- OperationalCapability: {cap_name}")
+
+                            # PostCondition
+                            post_cond_text = "<no post-condition>"
+                            oc = cap_map.get(cap_name)
+                            if oc:
+                                try:
+                                    cond = oc.get_post_condition()
+                                    if cond:
+                                        spec = getattr(cond, "get_specification", lambda: None)()
+                                        if spec:
+                                            if isinstance(spec, str):
+                                                post_cond_text = spec
+                                            else:
+                                                values = getattr(spec, "get_values", lambda: [])()
+                                                if values:
+                                                    post_cond_text = " ".join(values)
+                                                else:
+                                                    post_cond_text = "<empty post-condition>"
+                                        else:
+                                            post_cond_text = "<empty post-condition>"
+                                except Exception:
+                                    post_cond_text = "<error reading post-condition>"
+
+                            post_name = f"{cap_name} [post-condition]"
+                            post_indent = "  " * (cap_level + 1)
+                            #print(f"{post_indent}- PostCondition: {post_cond_text}")
+                            
+                            key = unique_key(post_name, post_cond_text)
+                            elements_dict[key] = {
+                                "name": post_name,
+                                "type": "PostCondition",
+                                "level": f"O{cap_level + 1}",
+                                "parent": f"OperationalCapability: {cap_name}",
+                                "functions": None,
+                                "obj": cond if 'cond' in locals() else None,
+                                "text": post_cond_text
+                            }
+                    except Exception:
+                        continue
+
+
+
+def assign_operational_capabilities(se, elements_dict):
+    """
+    Collega le OperationalCapabilities alle OperationalActivities.
+    Aggiunge anche le PostCondition.
+    Mantiene indentazione coerente nella stampa e nel dizionario.
+    """
+    # Recupera tutte le capabilities
+    try:
+        capabilities = se.get_all_contents_by_type(OperationalCapability) or []
+    except Exception:
+        capabilities = []
+
+    # Mappa temporanea nome -> capability
+    cap_map = {cap.get_name() or "<unnamed_Capability>": cap for cap in capabilities}
+
+    # Itera su una copia delle chiavi per evitare RuntimeError
+    for op_name in list(elements_dict.keys()):
+        op_data = elements_dict[op_name]
+        if op_data["type"] != "OperationalActivity":
+            continue
+
+        op_obj = op_data.get("obj")
+        if op_obj is None:
+            continue
+
+        indent_level = int(op_data["level"][1:])
+        indent = "  " * indent_level
+
+        # Per ogni capability verifica se questa OperationalActivity è coinvolta
+        for cap in capabilities:
+            cap_name = cap.get_name() or "<unnamed_Capability>"
+            try:
+                oc_java = cap.get_java_object()
+                feat = oc_java.eClass().getEStructuralFeature("involvedAbstractFunctions")
+                abstract_functions = oc_java.eGet(feat) or []
+            except Exception:
+                abstract_functions = []
+
+            try:
+                # Confronto oggetti EMF
+                if op_obj.get_java_object() in abstract_functions:
+                    # Livello indentazione: sotto l'OperationalActivity
+                    cap_level = indent_level + 1
+                    cap_indent = "  " * cap_level
+
+                    # Aggiorna il dizionario con la capability
+                    key = unique_key(cap_name, cap)
+                    elements_dict[key] = {
+                        "name": cap_name,
+                        "type": "OperationalCapability",
+                        "level": f"O{cap_level}",
+                        "parent": f"OperationalActivity: {op_name}",
+                        "functions": None,
+                        "obj": cap
+                    }
+
+                    # Stampa gerarchica immediata
+                    #print(f"{cap_indent}- OperationalCapability: {cap_name}")
+
+                    # ----------------------------
+                    # Estrai post-condition
+                    # ----------------------------
+                    post_cond_text = "<no post-condition>"
+                    oc = cap_map.get(cap_name)
+                    if oc:
+                        try:
+                            cond = oc.get_post_condition()
+                            if cond:
+                                spec = getattr(cond, "get_specification", lambda: None)()
+                                if spec:
+                                    if isinstance(spec, str):
+                                        post_cond_text = spec
+                                    else:
+                                        values = getattr(spec, "get_values", lambda: [])()
+                                        if values:
+                                            post_cond_text = " ".join(values)
+                                        else:
+                                            post_cond_text = "<empty post-condition>"
+                                else:
+                                    post_cond_text = "<empty post-condition>"
+                        except Exception:
+                            post_cond_text = "<error reading post-condition>"
+
+                    # Inserisci post-condition come sotto-elemento
+                    post_name = f"{cap_name} [post-condition]"
+                    post_indent = "  " * (cap_level + 1)
+                    #print(f"{post_indent}- PostCondition: {post_cond_text}")
+                    
+                    key = unique_key(post_name, post_cond_text)
+                    elements_dict[key] = {
+                        "name": post_name,
+                        "type": "PostCondition",
+                        "level": f"O{cap_level + 1}",
+                        "parent": f"OperationalCapability: {cap_name}",
+                        "functions": None,
+                        "obj": cond if 'cond' in locals() else None,
+                        "text": post_cond_text
+                    }
+
+            except Exception:
+                continue
+
+
+
+            
+def get_sub_logical_components(self) -> List[LogicalComponent]:
+    """
+    Returns: LogicalComponent[*]
+    """
+    return create_e_list(self.get_java_object().getSubLogicalComponents(), LogicalComponent)
+
+
+def populate_logical_and_node_hierarchy(se):
+    """
+    Populate elements_dict with LogicalComponents and NodePCs.
+    Includes root LogicalComponents (e.g., Skimsat) and builds children and parent relationships.
+    """
+    global elements_dict
+
+    # -----------------------------
+    # Step 1: extract all LogicalComponents including roots
+    # -----------------------------
+    logical_archs = se.get_all_contents_by_type(LogicalArchitecture) or []
+    if not logical_archs:
+        return elements_dict
+    la = logical_archs[0]
+
+    all_lcs_raw = []
+
+    # owned LogicalComponents
+    try:
+        all_lcs_raw += la.get_owned_logical_components() or []
+    except Exception:
+        pass
+
+    # from package
+    try:
+        pkg = getattr(la, "get_logical_component_pkg", lambda: None)()
+        if pkg:
+            all_lcs_raw += pkg.get_owned_logical_components() or []
+    except Exception:
+        pass
+
+    # everything else in architecture
+    try:
+        all_lcs_raw += la.get_all_contents_by_type(LogicalComponent) or []
+    except Exception:
+        pass
+
+    # Deduplicate by EMF identity
+    seen = set()
+    all_lcs = []
+    for lc in all_lcs_raw:
+        try:
+            key = str(lc.get_java_object())
+        except Exception:
+            key = str(id(lc))
+        if key not in seen:
+            seen.add(key)
+            all_lcs.append(lc)
+
+    # -----------------------------
+    # Step 2: build children map
+    # -----------------------------
+    all_nodepcs = se.get_all_contents_by_type(NodePC) or []
+    temp_children = {}
+
+    for lc in all_lcs:
+        children = []
+
+        # 1️⃣ Sub-logical components
+        try:
+            subs = lc.get_sub_logical_components() or []
+            children.extend(subs)
+        except Exception:
+            subs = []
+        
+        # --- se non ci sono sub-LC, controlla se lc è un root come Skimsat ---
+        if not subs:
+            try:
+                # proviamo a prendere i logical components contenuti nel container/package
+                if hasattr(lc, "get_owned_logical_components"):
+                    children.extend(lc.get_owned_logical_components() or [])
+                elif hasattr(lc, "get_logical_component_pkg"):
+                    pkg = lc.get_logical_component_pkg()
+                    if pkg:
+                        children.extend(pkg.get_owned_logical_components() or [])
+            except Exception:
+                pass
+
+
+        # 2️⃣ NodePCs that realize this LC
+        lc_java_obj = lc.get_java_object()
+        for node in all_nodepcs:
+            try:
+                realized_lcs = node.get_realized_logical_components() or []
+                if any(rlc.get_java_object() == lc_java_obj for rlc in realized_lcs):
+                    children.append(node)
+            except Exception:
+                pass
+
+        # 3️⃣ LC figli per container (necessario per root LC tipo Skimsat)
+        for candidate in all_lcs:
+            try:
+                if getattr(candidate, "get_container", lambda: None)() == lc:
+                    children.append(candidate)
+            except Exception:
+                pass
+
+        temp_children[lc] = children
+
+    # -----------------------------
+    # Step 3: create elements_dict entries (detect LogicalActor vs LogicalComponent)
+    # -----------------------------
+    for lc in all_lcs:
+        lc_name = lc.get_name() or "<unnamed_LC>"
+        lc_key = unique_key(lc_name, lc)
+    
+        # Detect correct type
+        lc_type = "LogicalComponent"
+        try:
+            # Check directly with isinstance first
+            if isinstance(lc, LogicalActor):
+                lc_type = "LogicalActor"
+            else:
+                # fallback: check EMF class name
+                java_class_name = lc.get_java_object().eClass().getName()
+                if "LogicalActor" in java_class_name:
+                    lc_type = "LogicalActor"
+        except Exception:
+            pass
+    
+        elements_dict[lc_key] = {
+            "name": lc_name,
+            "type": lc_type,
+            "level": None,
+            "parent": {"children": []},  # temporary, filled later
+            "functions": None,
+            "obj": lc
+        }
+
+
+    # populate children inside 'parent' subsection
+    for lc, children in temp_children.items():
+        lc_key = unique_key(lc.get_name() or "<unnamed_LC>", lc)
+        child_entries = []
+        for child in children:
+            if isinstance(child, LogicalComponent):
+                child_entries.append(f"LogicalComponent: {child.get_name() or '<unnamed_LC>'}")
+            elif isinstance(child, NodePC):
+                child_name = child.get_name() or "<unnamed_NodePC>"
+                child_key = unique_key(child_name, child)
+                if child_key not in elements_dict:
+                    elements_dict[child_key] = {
+                        "name": child_name,
+                        "type": "NodePC",
+                        "level": None,
+                        "parent": None,
+                        "functions": None,
+                        "obj": child
+                    }
+                child_entries.append(f"NodePC: {child_name}")
+        elements_dict[lc_key]["parent"]["children"] = child_entries
+
+    # -----------------------------
+    # Step 4: assign parents ('dad') to direct children only
+    # -----------------------------
+    for parent_lc, children in temp_children.items():
+        parent_name = parent_lc.get_name() or "<unnamed_LC>"
+        parent_key = unique_key(parent_name, parent_lc)
+
+        for child in children:
+            if isinstance(child, LogicalComponent) or isinstance(child, NodePC):
+                child_name = child.get_name() or "<unnamed_Child>"
+                child_key = unique_key(child_name, child)
+
+                if elements_dict[child_key].get("parent") is None:
+                    elements_dict[child_key]["parent"] = {}
+
+                elements_dict[child_key]["parent"]["dad"] = f"{elements_dict[parent_key]['type']}: {parent_name}"
+
+    # -----------------------------
+    # Step 5: extract and assign functions (after all parent/children are ready)
+    # -----------------------------
+    for key, entry in elements_dict.items():
+        if entry["type"] != "LogicalComponent":
+            continue
+    
+        obj = entry.get("obj")
+        if obj is None:
+            entry["functions"] = []
+            continue
+    
+        try:
+            funcs = obj.get_allocated_logical_functions() or []
+            entry["functions"] = [f.get_name() or "<unnamed_function>" for f in funcs]
+        except Exception:
+            entry["functions"] = []
+            
+    # -----------------------------
+    # Step 6: assign levels recursively
+    # -----------------------------
+    def assign_levels():
+        # funzione ricorsiva per assegnare livelli
+        def assign_level_recursively(key, level):
+            entry = elements_dict.get(key)
+            if not entry or entry.get("level") is not None:
+                return  # già assegnato o entry mancante
+    
+            entry["level"] = f"L{level}"
+            # processa solo figli che sono LogicalComponent
+            for child_str in entry.get("parent", {}).get("children", []):
+                if child_str.startswith("LogicalComponent:"):
+                    child_name = child_str.split(":", 1)[1].strip()
+                    # trova la key corrispondente
+                    for k, e in elements_dict.items():
+                        if e["type"] == "LogicalComponent" and e["name"] == child_name:
+                            assign_level_recursively(k, level + 1)
+                            break
+    
+        # trova tutti i root (senza dad o con dad di tipo System)
+        for key, entry in elements_dict.items():
+            parent_entry = entry.get("parent")
+            dad = parent_entry.get("dad") if parent_entry and isinstance(parent_entry, dict) else None
+            if entry["type"] == "LogicalComponent" and (dad is None or dad.startswith("System:")):
+                assign_level_recursively(key, 1)
+    
+    assign_levels()
+    
+    # -----------------------------
+    # Step 7: assign dad for LogicalActor/SystemActor and L1 LogicalComponents/System
+    # -----------------------------
+    try:
+        # Recupera System dalla System Analysis
+        
+        system_obj = None
+        try:
+            system_obj = se.get_system_analysis().get_system()
+        except Exception:
+            system_obj = None
+    
+        # -----------------------------
+        # 1️⃣ Crea tutte le SystemActors
+        # -----------------------------
+        system_actors = []
+        if system_obj:
+            try:
+                system_actors = system_obj.get_owned_actors() or []
+            except Exception:
+                system_actors = []
+    
+        for sys_actor in system_actors:
+            sys_actor_name = sys_actor.get_name() or "<unnamed_SystemActor>"
+            sys_key = unique_key(sys_actor_name, sys_actor)
+            if sys_key not in elements_dict:
+                elements_dict[sys_key] = {
+                    "name": sys_actor_name,
+                    "type": "SystemActor",
+                    "level": None,
+                    "parent": {"dad": None, "children": []},
+                    "functions": None,
+                    "obj": sys_actor
+                }
+    
+        # -----------------------------
+        # 2️⃣ Collega LogicalActors ai SystemActors
+        # -----------------------------
+        for sys_actor in system_actors:
+            sys_actor_name = sys_actor.get_name() or "<unnamed_SystemActor>"
+            sys_key = unique_key(sys_actor_name, sys_actor)
+    
+            try:
+                logical_actors = sys_actor.get_realizing_logical_actors() or []
+            except Exception:
+                logical_actors = []
+    
+            child_labels = []
+            for la in logical_actors:
+                la_name = la.get_name() or "<unnamed_LogicalActor>"
+                la_key = unique_key(la_name, la)
+    
+                # Se il LogicalActor non esiste, crealo
+                for sys_actor in system_actors:
+                    try:
+                        las = sys_actor.get_realizing_logical_actors() or []
+                        print(f"SystemActor '{sys_actor.get_name()}' realizes {len(las)} LogicalActors")
+                    except Exception as e:
+                        print(f"Failed get_realizing_logical_actors for {sys_actor.get_name()}: {e}")
+
+                
+                if la_key not in elements_dict:
+                    elements_dict[la_key] = {
+                        "name": la_name,
+                        "type": "LogicalActor",
+                        "level": None,
+                        "parent": {"dad": None, "children": []},
+                        "functions": None,
+                        "obj": la
+                    }
+    
+                # Imposta il dad del LogicalActor
+                elements_dict[la_key]["parent"]["dad"] = f"SystemActor: {sys_actor_name}"
+    
+                # Aggiungi al children del SystemActor
+                child_labels.append(f"LogicalActor: {la_name}")
+    
+            # Aggiorna children del SystemActor
+            elements_dict[sys_key]["parent"]["children"] = child_labels
+    
+        # -----------------------------
+        # 3️⃣ Collega L1 LogicalComponents al System
+        # -----------------------------
+        if system_obj:
+            system_name = getattr(system_obj, "get_name", lambda: "<unnamed_System>")()
+            sys_key = unique_key(system_name, system_obj)
+    
+            # Crea entry separata per System se non esiste
+            if sys_key not in elements_dict:
+                elements_dict[sys_key] = {
+                    "name": system_name,
+                    "type": "System",
+                    "level": None,
+                    "parent": None,
+                    "functions": None,
+                    "obj": system_obj
+                }
+    
+            # Trova tutte le L1 LogicalComponents
+            for lc_key in list(elements_dict.keys()):
+                entry = elements_dict[lc_key]
+                if entry.get("type") == "LogicalComponent" and entry.get("level") == "L1":
+                    entry["parent"]["dad"] = f"System: {system_name}"
+    
+    except Exception as e:
+        print(f"[warning] could not assign SystemActor/System dad: {e}")
+
+
+
+    
+    # Step 8: process logical functions and their realizations
+    try:
+        all_logical_funcs = se.get_all_contents_by_type(LogicalFunction) or []
+    except Exception:
+        all_logical_funcs = []
+    
+    for lf in all_logical_funcs:
+        try:
+            process_function(lf, parent_name="LogicalArchitecture", level=1, se=se)
+        except Exception as e:
+            print(f"Warning: failed to process logical function {lf.get_name()}: {e}")
+    
+    # After logical, process system functions
+    try:
+        all_sys_funcs = se.get_all_contents_by_type(SystemFunction) or []
+    except Exception:
+        all_sys_funcs = []
+    
+    for sf in all_sys_funcs:
+        try:
+            process_function(sf, parent_name="SystemAnalysis", level=1, se=se)
+        except Exception as e:
+            print(f"Warning: failed to process system function {sf.get_name()}: {e}")
+            
+    system_actors = []
+
+    return elements_dict
+
+
+
+def get_all_parents_from_hierarchy(lc_name, hierarchy):
+    """
+    Returns the direct parent LogicalComponent name for the given LC.
+    """
+    return hierarchy.get(lc_name, None)
+
+def get_system_obj(se):
+    sa = se.get_system_analysis()
+    if not sa:
+        return None
+    try:
+        return sa.get_system()
+    except Exception:
+        return None
+
+
+def process_behaviorpc(bp, parent_name, level):
+    bp_name = bp.get_name() or "<unnamed_BP>"
+
+    func_names = []
+    if hasattr(bp, "get_allocated_functions"):
+        try:
+            func_names = bp.get_allocated_functions() or []
+        except Exception:
+            func_names = []
+    
+    key = unique_key(bp_name, bp)
+    elements_dict[key] = {
+        "name": bp_name,
+        "type": "BehaviorPC",
+        "level": f"P{level}",
+        "parent": {"dad": parent_name, "children": []},
+        "functions": [f.get_name() for f in func_names if f.get_name()] or None,
+        "obj": bp
+    }
+
+    for f in func_names:
+        process_function(f, parent_name=f"BehaviorPC: {bp_name}", level=level + 1, se=se)
+
+    if hasattr(bp, "get_owned_physical_components"):
+        for sub in bp.get_owned_physical_components() or []:
+            if isinstance(sub, NodePC):
+                process_nodepc(sub, level=level + 1, parent_name=f"BehaviorPC: {bp_name}")
+            elif isinstance(sub, BehaviorPC):
+                process_behaviorpc(sub, parent_name=f"BehaviorPC: {bp_name}", level=level + 1)
+                
+                
+
+def process_nodepc(nodepc, level=0, parent_name=None):
+    """
+    Robust NodePC processing:
+      - register NodePC with unique_key
+      - update parent info if the NodePC was previously registered without parent
+      - collect children from multiple accessors:
+          get_deployed_behavior_p_cs, get_behaviors (for BehaviorPC)
+          get_sub_nodepc_components, get_nodepcs, get_owned_nodepc_components,
+          get_owned_physical_components (filter NodePC) (for NodePC children)
+      - avoid duplicates and always use unique_key for registrations
+    """
+    node_name = nodepc.get_name() or "<unnamed_NodePC>"
+    key = unique_key(node_name, nodepc)
+
+    # If the node is already registered, update parent/level if missing or weaker,
+    # but do not return immediately because we may need to update relationships.
+    existing = elements_dict.get(key)
+    if existing:
+        # update parent 'dad' if currently None and a new parent_name is given
+        try:
+            if parent_name and isinstance(existing.get("parent"), dict):
+                current_dad = existing["parent"].get("dad")
+                if not current_dad:
+                    existing["parent"]["dad"] = parent_name
+                # if parent_name is different, keep both: append to a parents list if desired
+                elif current_dad != parent_name:
+                    # convert to list of dads if needed
+                    if isinstance(existing["parent"]["dad"], str):
+                        existing["parent"]["dad"] = [existing["parent"]["dad"], parent_name]
+                    elif isinstance(existing["parent"]["dad"], list):
+                        if parent_name not in existing["parent"]["dad"]:
+                            existing["parent"]["dad"].append(parent_name)
+        except Exception:
+            pass
+
+        # Update level if new level is shallower (keep lowest numeric P..)
+        try:
+            existing_level = existing.get("level")
+            if existing_level:
+                # parse numeric part
+                old_num = int(existing_level.lstrip("P")) if existing_level.lstrip("P").isdigit() else None
+                if old_num is None or level < old_num:
+                    existing["level"] = f"P{level}"
+            else:
+                existing["level"] = f"P{level}"
+        except Exception:
+            pass
+
+        # continue: we still want to collect children and possibly process them
+    else:
+        # Register new NodePC entry
+        elements_dict[key] = {
+            "name": node_name,
+            "type": "NodePC",
+            "level": f"P{level}",
+            "parent": {"dad": parent_name, "children": []},
+            "functions": [],
+            "obj": nodepc
+        }
+
+    indent = "  " * level
+    #print(f"{indent}- NodePC: {node_name}, level: P{level}")
+
+    # ---------- Gather children safely ----------
+    child_labels = []        # ordered, may contain "NodePC: name" / "BehaviorPC: name"
+    seen_labels = set()      # to dedupe text labels
+
+    # ---- BehaviorPC children (preferred and fallback accessors) ----
+    behavior_candidates = []
+    try:
+        if hasattr(nodepc, "get_deployed_behavior_p_cs"):
+            behavior_candidates += nodepc.get_deployed_behavior_p_cs() or []
+        if hasattr(nodepc, "get_behaviors"):
+            behavior_candidates += nodepc.get_behaviors() or []
+    except Exception as e:
+        print(f"{indent}  - warning while fetching behavior candidates: {e}")
+
+    for bp in behavior_candidates:
+        if bp is None:
+            continue
+        try:
+            bp_name = bp.get_name() or "<unnamed_BehaviorPC>"
+        except Exception:
+            bp_name = "<unnamed_BehaviorPC>"
+        label = f"BehaviorPC: {bp_name}"
+        if label not in seen_labels:
+            seen_labels.add(label)
+            child_labels.append(label)
+
+        # register behavior if needed
+        bp_key = unique_key(bp_name, bp)
+        if bp_key not in elements_dict:
+            elements_dict[bp_key] = {
+                "name": bp_name,
+                "type": "BehaviorPC",
+                "level": f"P{level+1}",
+                "parent": {"dad": f"NodePC: {node_name}", "children": []},
+                "functions": [],
+                "obj": bp
+            }
+
+        # recursive processing (safe)
+        try:
+            process_behaviorpc(bp, parent_name=f"NodePC: {node_name}", level=level + 1)
+        except Exception as e:
+            print(f"{indent}  - warning: error processing BehaviorPC '{bp_name}': {e}")
+            
+
+    # ---- NodePC children: try several accessors ----
+    # 2️⃣ NodePC children (sub-node physical components)
+    try:
+        subnode_candidates = []
+    
+        # Prefer native sub-node accessor
+        if hasattr(nodepc, "get_sub_nodepc_components"):
+            subnode_candidates += nodepc.get_sub_nodepc_components() or []
+    
+        # Fallback: some models include them in owned physical components
+        if hasattr(nodepc, "get_owned_physical_components"):
+            for sub in nodepc.get_owned_physical_components() or []:
+                if isinstance(sub, NodePC):
+                    subnode_candidates.append(sub)
+    
+    except Exception as e:
+        print(f"{indent}  - warning while fetching node children candidates: {e}")
+
+
+    # Filter likely NodePC instances (tolerant test)
+    filtered_subnodes = []
+    for sub in subnode_candidates:
+        if sub is None:
+            continue
+        try:
+            if isinstance(sub, NodePC):
+                filtered_subnodes.append(sub)
+                continue
+            # fallback heuristic: presence of NodePC-like methods
+            if hasattr(sub, "get_deployed_behavior_p_cs") or hasattr(sub, "get_sub_nodepc_components"):
+                filtered_subnodes.append(sub)
+                continue
+        except Exception:
+            filtered_subnodes.append(sub)
+
+    # Process each child node
+    for sub in filtered_subnodes:
+        try:
+            sub_name = sub.get_name() or "<unnamed_NodePC>"
+        except Exception:
+            sub_name = "<unnamed_NodePC>"
+
+        label = f"NodePC: {sub_name}"
+        if label not in seen_labels:
+            seen_labels.add(label)
+            child_labels.append(label)
+
+        sub_key = unique_key(sub_name, sub)
+        # register if absent
+        if sub_key not in elements_dict:
+            elements_dict[sub_key] = {
+                "name": sub_name,
+                "type": "NodePC",
+                "level": f"P{level+1}",
+                "parent": {"dad": f"NodePC: {node_name}", "children": []},
+                "functions": [],
+                "obj": sub
+            }
+        else:
+            # ensure parent info exists for the child if missing
+            try:
+                child_entry = elements_dict[sub_key]
+                if isinstance(child_entry.get("parent"), dict):
+                    if not child_entry["parent"].get("dad"):
+                        child_entry["parent"]["dad"] = f"NodePC: {node_name}"
+            except Exception:
+                pass
+
+        # recursion
+        try:
+            process_nodepc(sub, level=level + 1, parent_name=f"NodePC: {node_name}")
+        except Exception as e:
+            print(f"{indent}  - warning: error processing child NodePC '{sub_name}': {e}")
+
+    # finalize children list without duplicates
+    elements_dict[key]["parent"]["children"] = child_labels
+
+    # debug note
+    #if not child_labels:
+        #print(f"{indent}  - note: no NodePC or BehaviorPC children found for '{node_name}'.")
+
+
+
+
+def extract_all_elements_with_typed_parents(se):
+    """Estrae tutti gli elementi fisici e logici, compresi i genitori logici."""
+    elements_dict.clear()
+
+    phys_arch = se.get_physical_architecture()
+    phys_sys = None
+    if phys_arch and hasattr(phys_arch, "get_physical_system"):
+        try:
+            phys_sys = phys_arch.get_physical_system()
+        except Exception:
+            phys_sys = None
+
+    roots = []
+    if phys_sys and hasattr(phys_sys, "get_owned_physical_components"):
+        roots = phys_sys.get_owned_physical_components() or []
+    elif hasattr(phys_arch, "get_owned_physical_components"):
+        roots = phys_arch.get_owned_physical_components() or []
+
+    for npc in roots:
+        if isinstance(npc, NodePC):
+            process_nodepc(npc, level=0)
+
+    return elements_dict
+
+
+
+
+# --- Usage ---
+# 1. Extract Physical Hierarchy (NodePC + BehaviorPC + PhysicalFunctions)
+elements_dict = extract_all_elements_with_typed_parents(se)
+
+# 2. Build Logical Hierarchy (LogicalComponents + Functions)
+logical_dict = populate_logical_and_node_hierarchy(se)
+
+# 3. Merge logical_dict into elements_dict, keeping existing data
+for k, v in logical_dict.items():
+    key = unique_key(v['name'], v['obj'])
+    if key not in elements_dict:
+        elements_dict[key] = v
+    else:
+        for field, val in v.items():
+            if field not in elements_dict[key] or elements_dict[key][field] in (None, [], {}):
+                elements_dict[key][field] = val
+
+
+# 4. Process Logical and System Functions
+# --- 3a. Logical Functions ---
+try:
+    all_logical_funcs = se.get_all_contents_by_type(LogicalFunction) or []
+    #print(f"Found {len(all_logical_funcs)} LogicalFunctions")
+    for lf in all_logical_funcs:
+        process_function(lf, parent_name="LogicalArchitecture", level=1, se=se)
+except Exception as e:
+    print(f"Warning: could not process LogicalFunctions: {e}")
+
+# --- 3b. System Functions ---
+try:
+    all_sys_funcs = se.get_all_contents_by_type(SystemFunction) or []
+    #print(f"Found {len(all_sys_funcs)} SystemFunctions")
+    for sf in all_sys_funcs:
+        process_function(sf, parent_name="SystemAnalysis", level=1, se=se)
+except Exception as e:
+    print(f"Warning: could not process SystemFunctions: {e}")
+
+# --- 3c. Operational Activities (optional direct extraction) ---
+try:
+    all_ops = se.get_all_contents_by_type(OperationalActivity) or []
+    #print(f"Found {len(all_ops)} OperationalActivities")
+    for op in all_ops:
+        op_name = op.get_name() or "<unnamed_OperationalActivity>"
+        key = unique_key(op_name, op)
+        if key not in elements_dict:
+            elements_dict[key] = {
+                "name": op_name,
+                "type": "OperationalActivity",
+                "level": "O1",
+                "parent": None,
+                "functions": None,
+                "obj": op
+            }
+except Exception as e:
+    print(f"Warning: could not extract OperationalActivities: {e}")
+
+# 5. Assign OperationalCapabilities and PostConditions
+assign_operational_capabilities(se, elements_dict)
+
+
+
+#print("\n--- Summary ---")
+#for name, data in elements_dict.items():
+    #print(f"{name}: {data}")
+
+
+# --- Excel Export ---
+
+# --- Parametri file Capella ---
+project_name = aird_path[0:(aird_path.index("/", 1) + 1)]
+project = CapellaPlatform.getProject(project_name)
+folder = CapellaPlatform.getFolder(project, 'results')
+xlsx_file_name = CapellaPlatform.getAbsolutePath(folder) + '/' + 'Validation Matrix.xlsx'
+
+# --- Creazione workbook ---
+workbook = Workbook()
+ws_temp = workbook.active
+ws_temp.title = 'temp'
+
+# --- Stile ---
+header_font = Font(bold=True, name="Calibri")
+center_alignment = Alignment(horizontal="center", vertical="center")
+wrap_alignment = Alignment(wrap_text=True, vertical="top")
+ws_temp.auto_filter.ref = "A1:F1"
+ws_temp.freeze_panes = "A2"
+
+
+# --- Intestazione foglio temp ---
+headers = ["Name", "Type", "Level", "Parent", "Functions", "Obj"]
+for col_num, header in enumerate(headers, start=1):
+    cell = ws_temp.cell(row=1, column=col_num, value=header)
+    cell.font = header_font
+    cell.alignment = center_alignment
+
+# --- Popolamento dati dal dizionario elements_dict ---
+for row_num, (name, info) in enumerate(elements_dict.items(), start=2):
+    # Usa sempre il nome pulito dal dizionario (senza __id)
+    display_name = info.get("name") or str(name).split("__")[0]
+    ws_temp.cell(row=row_num, column=1, value=display_name).alignment = wrap_alignment
+    ws_temp.cell(row=row_num, column=2, value=str(info.get('type'))).alignment = wrap_alignment
+    ws_temp.cell(row=row_num, column=3, value=str(info.get('level'))).alignment = wrap_alignment
+    ws_temp.cell(row=row_num, column=4, value=str(info.get('parent'))).alignment = wrap_alignment
+    #ws_temp.cell(row=row_num, column=7, value=str(name)).alignment = wrap_alignment  # chiave interna unica
+
+    
+    # Gestione funzioni come stringa
+    functions_value = info.get('functions')
+    if isinstance(functions_value, list):
+        safe_list = [str(f).replace("&", "e") for f in functions_value]
+        functions_value = ", ".join(safe_list)
+    ws_temp.cell(row=row_num, column=5, value=functions_value).alignment = wrap_alignment
+
+    ws_temp.cell(row=row_num, column=6, value=str(info.get('obj'))).alignment = wrap_alignment
+
+
+
+
+ws_hierarchy = workbook.create_sheet("Hierarchy")
+
+# --- Aggiunta intestazioni ---
+headers2 = [
+    "Behavior Physical Component", "Physical Function",
+    "Physical Node PC", "Physical Function",
+    "Physical Node", "Physical Function",
+    "Physical Node", "Physical Function",
+    "Logical Component", "Logical Function",
+    "Logical Component", "Logical Function",
+    "Logical Component", "Logical Function",
+    "System Component", "System Function",
+    "Operational Activities", "Operational Entity",
+    "Operational Capabilities", "Post Condition",
+    "Validation Check"
+]
+ws_hierarchy.append(headers2)
+
+# --- Funzione di supporto per trovare figli e padri ---
+
+def safe_join(funcs):
+    """Ritorna una stringa unita con ', ' oppure stringa vuota se None"""
+    if funcs is None:
+        return ''
+    if isinstance(funcs, str):
+        return funcs
+    if isinstance(funcs, (list, tuple)):
+        return ', '.join(str(f) for f in funcs)
+    return str(funcs)
+
+def find_children(parent_name, elements_dict):
+    """Restituisce la lista di chiavi dei figli di un elemento dato il parent"""
+    return [key for key, val in elements_dict.items() if val.get('parent') == parent_name]
+
+def find_element_by_name_and_type(name, type_, elements_dict):
+    """
+    Restituisce la chiave dell'elemento con un dato name e type.
+    Confronti case-insensitive e ignorando spazi.
+    """
+    type_lower = type_.strip().lower() if type_ else ''
+    for key, val in elements_dict.items():
+        val_type = val.get('type', '').strip().lower()
+        val_name = val.get('name', '')
+        if val_type == type_lower and val_name == name:
+            return key
+    return None
+
+
+# --- Trova i Behaviour PC ---
+behaviour_keys = [key for key, val in elements_dict.items() if val.get('type') == 'BehaviorPC']
+
+for b_key in behaviour_keys:
+    row = []
+    b_elem = elements_dict[b_key]
+    row.append(b_elem.get('name', ''))          # Behaviour Component
+    row.append(safe_join(b_elem.get('functions')))  # Physical Function allocata
+
+    # --- Ciclo livelli fisici ---
+    current_node_name = b_elem.get('parent')
+    level = 0
+    while current_node_name:
+        node_key = find_element_by_name_and_type(current_node_name, 'PhysicalNode', elements_dict)
+        if not node_key:
+            break
+        node_elem = elements_dict[node_key]
+        row.append(node_elem.get('name', ''))           # Physical Node
+        row.append(safe_join(node_elem.get('functions')))  # Physical Function
+        current_node_name = node_elem.get('parent')
+        level += 1
+
+    # --- Ciclo livelli logici ---
+    current_logical_name = current_node_name  # l'ultimo nodo fisico diventa padre logico
+    while current_logical_name:
+        logical_key = find_element_by_name_and_type(current_logical_name, 'LogicalComponent', elements_dict)
+        if not logical_key:
+            break
+        logical_elem = elements_dict[logical_key]
+        row.append(logical_elem.get('name', ''))  # Logical Component
+        row.append(safe_join(logical_elem.get('functions')))  # Logical Function
+        current_logical_name = logical_elem.get('parent')
+
+    # --- System component e funzioni ---
+    system_key = find_element_by_name_and_type(current_logical_name, 'SystemComponent', elements_dict)
+    if system_key:
+        system_elem = elements_dict[system_key]
+        row.append(system_elem.get('name', ''))
+        row.append(safe_join(system_elem.get('functions')))
+
+        # --- Operational activity, entity, capability e post condition ---
+        children_keys = find_children(system_elem.get('name'), elements_dict)
+        for child_key in children_keys:
+            child_elem = elements_dict[child_key]
+            if child_elem.get('type') == 'OperationalActivity':
+                row.append(child_elem.get('name', ''))  # Operational Activity
+                # Operational Entity
+                entity_key = child_elem.get('parent')
+                if entity_key:
+                    entity_elem = elements_dict.get(entity_key)
+                    if entity_elem:
+                        row.append(entity_elem.get('name', ''))
+                        # Operational Capability
+                        capability_keys = find_children(entity_elem.get('name'), elements_dict)
+                        for cap_key in capability_keys:
+                            cap_elem = elements_dict[cap_key]
+                            if cap_elem.get('type') == 'OperationalCapability':
+                                row.append(cap_elem.get('name', ''))
+                                row.append(cap_elem.get('post_condition', ''))
+
+    # Colonna vuota Validation Check
+    row.append('')
+
+    # --- Aggiungi riga al foglio ---
+    ws_hierarchy.append(row)
+    
+
+
+
+#print("Complete ###########################")                        
+#for name, data in dict_hierarchy.items():
+    #print(f"{name}: {data}")
+
+#print("Final ###########################")                        
+#for name, data in final.items():
+    #print(f"{name}: {data}")
+
+# --- Salvataggio finale ---
+workbook.save(xlsx_file_name)
+print(f"Excel salvato come {xlsx_file_name}")
+CapellaPlatform.refresh(folder)
+
+
+
+
+# =========================
+# Salva file Excel
+# =========================
+
+#workbook.save(xlsx_file_name)
+#print(f"Excel salvato come {xlsx_file_name}")
+#CapellaPlatform.refresh(folder)
+

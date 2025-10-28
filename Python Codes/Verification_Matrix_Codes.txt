@@ -1,0 +1,288 @@
+# File to define the functions to create the verification matrix
+
+# =========================
+# Import e setup
+# =========================
+
+# Include needed for the Capella modeller API
+include('workspace://Python4Capella/simplified_api/capella.py')
+if False:
+    from simplified_api.capella import *
+    
+# Include needed for utilities
+include('workspace://Python4Capella/utilities/CapellaPlatform.py')
+if False:
+    from utilities.CapellaPlatform import *
+    
+# Include needed to read/write xlsx files
+from openpyxl import *
+from openpyxl.formatting.rule import ColorScaleRule,CellIsRule,FormulaRule
+from openpyxl.styles import Alignment, NamedStyle, Font, colors, Color, PatternFill
+from openpyxl.styles.differential import DifferentialStyle
+from openpyxl.styles.borders import Border, Side
+from openpyxl.utils import get_column_letter
+
+# =========================
+# Helper functions
+# =========================
+
+
+
+def extract_relevant_attributes(jObj):
+    """Extracts the key attributes of a Requirement into a dict (string values only)."""
+    eclass = jObj.eClass()
+    data = {}
+    for attr_name in ATTRS_TO_SAVE:
+        feature = eclass.getEStructuralFeature(attr_name)
+        if feature is None:
+            data[attr_name] = ""
+        else:
+            value = jObj.eGet(feature)
+            data[attr_name] = "" if value is None else str(value)
+    return data
+
+def get_verification_method(jObj):
+    """Checks which verification methods are linked to a requirement (Test, Analysis, ROD, Inspection)."""
+    eclass = jObj.eClass()
+    methods = []
+    for ref_attr, method_name in VERIFICATION_REFERENCES.items():
+        feature = eclass.getEStructuralFeature(ref_attr)
+        if feature:
+            val = jObj.eGet(feature)
+            if val:
+                methods.append(method_name)
+    return ", ".join(methods) if methods else ""
+
+
+def get_label_safe(element):
+    """
+    Return a human-readable label for a Capella element.
+    Falls back to name or identification, never returns 'exception'.
+    """
+    try:
+        if not element:
+            return ""
+
+        # Unwrap Sirius decorators
+        for unwrap in ("getSemanticElement", "getTarget", "getModelElement"):
+            if hasattr(element, unwrap):
+                try:
+                    element = getattr(element, unwrap)()
+                    break
+                except:
+                    pass
+
+        # 1) Try CapellaPlatform label
+        try:
+            lbl = CapellaPlatform.getLabel(element)
+            if lbl:
+                return str(lbl)
+        except:
+            pass
+
+        # 2) Try common EMF getters
+        for getter in ("getName", "getIdentification"):
+            if hasattr(element, getter):
+                try:
+                    value = getattr(element, getter)()
+                    if value:
+                        return str(value)
+                except:
+                    pass
+
+        return ""
+    except:
+        return ""
+
+
+# PC Reference (NodePC)
+def get_pc_reference_name(req_jobj):
+    """Extracts and formats the PC reference(s) linked to a requirement."""
+    feature = req_jobj.eClass().getEStructuralFeature("pcRef")
+    if not feature:
+        return ""
+    
+    raw = req_jobj.eGet(feature)
+    if not raw:
+        return ""
+    
+    # 1) Turn EMF EList into a real Python list
+    try:
+        pcs = list(raw)
+    except TypeError:
+        pcs = [raw]
+    
+    labels = []
+    for pc in pcs:
+        # 2) DEBUG: print out exactly what this proxy is  
+        try:
+            class_name = pc.getClass().getName()
+        except Exception:
+            class_name = type(pc).__name__
+        #print(f">>> PC item class: {class_name}  |  raw toString: {pc}")
+        
+        # 3) Unwrap any Sirius decorator or wrapper
+        for unwrap in ("getSemanticElement", "getTarget", "getModelElement"):
+            if hasattr(pc, unwrap):
+                try:
+                    pc = getattr(pc, unwrap)()
+                    print(f"   unwrapped via {unwrap} → {pc}")
+                    break
+                except:
+                    pass
+        
+        # 4) Try CapellaPlatform.getLabel() on the unwrapped object
+        label = None
+        try:
+            label = CapellaPlatform.getLabel(pc)
+        except:
+            pass
+        
+        # 5) Fallback to common Java getters
+        if not label and hasattr(pc, "getName"):
+            try:
+                label = pc.getName()
+            except:
+                pass
+        if not label and hasattr(pc, "getIdentification"):
+            try:
+                label = pc.getIdentification()
+            except:
+                pass
+        
+        # 6) Last resort: toString
+        label = label or str(pc)
+        labels.append(label)
+    
+    return ", ".join(labels)
+
+
+def get_identification(obj):
+    """Extracts the 'identification' attribute if available, otherwise returns 'N/A'."""
+    try:
+        if hasattr(obj, 'eClass'):
+            eclass = obj.eClass()
+            id_feature = eclass.getEStructuralFeature("reqIdentification")
+            if id_feature:
+                id_value = obj.eGet(id_feature)
+                return str(id_value) if id_value else "N/A"
+        return "N/A"
+    except Exception as e:
+        print(f"Error getting identification: {e}")
+        return "N/A"
+
+
+
+# Related Requirements (EObject)
+def get_related_requirements_name(req_jobj):
+    """
+    Returns a comma-separated list of related requirement IDs or names.
+    Never returns 'exception', always unwraps EList → list.
+    """
+    feature = req_jobj.eClass().getEStructuralFeature("reqReqAss")
+    if not feature:
+        return ""
+
+    raw = req_jobj.eGet(feature)
+    if not raw:
+        return ""
+
+    # Turn EMF EList into a Python list
+    try:
+        items = list(raw)
+    except TypeError:
+        items = [raw]
+
+    labels = []
+    for item in items:
+        label = get_label_safe(item)
+
+        # If still empty, fall back to explicit identification extraction
+        if not label:
+            try:
+                eclass = item.eClass()
+                feat  = eclass.getEStructuralFeature("reqIdentification")
+                val   = item.eGet(feat) if feat else None
+                label = str(val) if val else ""
+            except:
+                label = ""
+
+        labels.append(label or "N/A")
+
+    return ", ".join(labels)
+
+def extract_verification_attrs(req_jobj):
+    """
+    Extracts verification-related attributes:
+    - verificationStage
+    - compliance
+    - complianceComment
+    - justification
+    - testSpecification
+    for each verification method (Test, Analysis, ROD, Inspection).
+    Returns a dict with final Excel columns.
+    """
+    
+    # maps EMF feature → (title, attributes)
+    verif_map = {
+        "teAss":       ("Test",       ["stage", "compliance", "complianceComment", "justification", "specification"]),
+        "anAss":   ("Analysis",   ["stage", "compliance", "complianceComment", "justification"]),
+        "rodAss":        ("ROD",        ["stage", "compliance", "complianceComment", "justification"]),
+        "inAss": ("Inspection", ["stage", "compliance", "complianceComment", "justification"])
+    }
+
+    # accumulators for each column
+    cols = {
+        "Verification Stage":        [],
+        "Compliance":        [],
+        "Compliance Comment":           [],
+        "Justification":     [],
+        "Test Specification": []
+    }
+
+    for feat_name, (title, attrs) in verif_map.items():
+        feature = req_jobj.eClass().getEStructuralFeature(feat_name)
+        raw = req_jobj.eGet(feature) if feature else None
+        if not raw:
+            continue
+
+        # list normalization
+        elems = list(raw) if hasattr(raw, "__iter__") and not isinstance(raw, str) else [raw]
+
+        # extract required attributes for each elements
+        for elem in elems:
+            if hasattr(elem, "getSemanticElement"):
+                try:
+                    elem = elem.getSemanticElement()
+                except:
+                    pass
+
+            for attr in attrs:
+                feat = elem.eClass().getEStructuralFeature(attr)
+                val = elem.eGet(feat) if feat else None
+                if val is None:
+                    continue
+
+                # chose the right column
+                if attr == "stage":
+                    target = "Verification Stage"
+                if attr == "compliance":
+                    target = "Compliance"
+                elif attr == "complianceComment":
+                    target = "Compliance Comment"
+                elif attr == "justification":
+                    target = "Justification"
+                elif attr == "specification":
+                    target = "Test Specification"
+                else:
+                    continue
+
+                # add “Title: value”
+                cols[target].append(f"{title}:\n  {val}")
+
+    # concatenate blocks with double line break
+    for key in cols:
+        cols[key] = "\n\n".join(cols[key])
+
+    return cols
+
