@@ -8,7 +8,7 @@ It enables users to generate requirements with standardised and structured infor
 
 ### Key Features
 
-*Standardised Requirement Creation
+* Standardised Requirement Creation
 The viewpoint introduces predefined attributes and templates for requirements, improving consistency and reducing ambiguity.
 This standardisation is crucial when managing hundreds or even thousands of requirements in large-scale projects.
 
