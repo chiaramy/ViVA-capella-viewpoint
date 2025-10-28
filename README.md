@@ -12,10 +12,10 @@ It enables users to generate requirements with standardised and structured infor
 The viewpoint introduces predefined attributes and templates for requirements, improving consistency and reducing ambiguity.
 This standardisation is crucial when managing hundreds or even thousands of requirements in large-scale projects.
 
-*Faster Requirement Authoring
+* Faster Requirement Authoring
 The process of creating and maintaining requirements has been made simpler and more efficient, significantly reducing the time needed for documentation.
 
-*Dynamic Visualisations
+* Dynamic Visualisations
 The viewpoint includes dynamic diagrams that automatically change colour based on specific attributes within the model.
 This feature helps users quickly identify potential issues or inconsistencies and resolve them more effectively.
 
@@ -24,11 +24,11 @@ This feature helps users quickly identify potential issues or inconsistencies an
 The viewpoint is complemented by two Python scripts designed to run in Python4Capella.
 These scripts enable the automatic extraction of key information into Excel matrices:
 
-*Verification Matrix
+* Verification Matrix
 Extracts all requirements from the selected diagram, including their key attributes.
 The output groups requirements by category, providing a clear and traceable overview.
 
-*Validation Matrix
+* Validation Matrix
 Traverses the entire model to collect information across all abstraction levels.
 This allows users to trace requirements back from system implementation to stakeholder needs, ensuring that the operational-level objectives are fully satisfied.
 
@@ -45,10 +45,10 @@ This projects has the source code of the viewpoint and the packaged viewpoint (F
 
 ### Prerequisites
 To change in the source code you will need to have:
-* [Capella Studio](https://www.eclipse.org/capella/download.html) - Open source SDK to develop Capella add-ons
+* [Capella Studio](https://www.eclipse.org/capella/download.html) v.7.0.1 - Open source SDK to develop Capella add-ons
 
-To use the packaged version of the project (QualityAssessment_201912031504.zip) you will need to have:
-* [Capella](https://www.eclipse.org/capella/download.html) - Open source MBSE tool to create system, software or hardware architectures
+To use the packaged version of the project you will need to have:
+* [Capella](https://www.eclipse.org/capella/download.html) v.7.0 - Open source MBSE tool to create system, software or hardware architectures
 
 
 ### Installing the source code
@@ -99,7 +99,7 @@ To use the packaged version of the project (QualityAssessment_201912031504.zip) 
 
 ## Built With
 
-* [Capella Studio](https://www.eclipse.org/capella/download.html) - Download page
+* [Capella Studio](https://www.eclipse.org/capella/download.html) v.7.0- Download page
 
 
 ## Authors
