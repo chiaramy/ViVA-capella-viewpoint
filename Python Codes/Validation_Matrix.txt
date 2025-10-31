@@ -38,7 +38,7 @@ import re
 
 
 # ---- Configuration ----
-aird_path = "/SkimSat/SkimSat.aird"  # Change to your model path
+aird_path = "xxx.aird"  # Change to your model path
 
 # Open Capella model
 model = CapellaModel()
@@ -1340,4 +1340,5 @@ CapellaPlatform.refresh(folder)
 #workbook.save(xlsx_file_name)
 #print(f"Excel salvato come {xlsx_file_name}")
 #CapellaPlatform.refresh(folder)
+
 
