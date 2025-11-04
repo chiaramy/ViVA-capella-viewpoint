@@ -110,7 +110,7 @@ requirements = [el for el in diagram.get_represented_elements()
 # =========================
 
 # ---- Configuration ----
-#aird_path = "/SkimSat/SkimSat.aird"  # Change if needed
+#aird_path = "xxx.aird"  # Change if needed
 
 # Open Capella model
 #model = CapellaModel()
@@ -390,5 +390,6 @@ for ref in unique_refs:
 # =========================
 workbook.save(xlsx_file_name)
 print(f"Excel file saved at: {xlsx_file_name}")
+
 
 CapellaPlatform.refresh(folder)
